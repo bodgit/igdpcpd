@@ -1,0 +1,4 @@
+igdpcpd
+*.o
+parse.c
+*.manlint
