@@ -706,6 +706,8 @@ ssdp_recvmsg(int fd, short event, void *arg)
 			struct in6_pktinfo	*info;
 
 			info = (struct in6_pktinfo *)CMSG_DATA(cmsg);
+			ifindex = info->ipi6_ifindex;
+
 			if (memcmp(&info->ipi6_addr, &ssdp6.sin6_addr,
 			    sizeof(struct in6_addr)) == 0)
 				mcast = 1;
