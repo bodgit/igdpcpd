@@ -161,7 +161,7 @@ enum upnp_services {
 struct upnp_nss {
 	enum upnp_types	 type;
 	char		*name;
-	int		 version;
+	unsigned int	 version;
 };
 
 struct ssdp_device {

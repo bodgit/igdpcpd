@@ -15,6 +15,7 @@
  */
 
 #include <sys/limits.h>
+#include <sys/utsname.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +66,15 @@
 #define	UPNP_VERSION_WAN_CONNECTION_DEVICE		 1
 #define	UPNP_VERSION_WAN_IP_CONNECTION			 1
 #endif
+
+#define	XML_INDENT_TREE					 1
+
+#define	SOAP_ENVELOPE_URI \
+	"http://schemas.xmlsoap.org/soap/envelope/"
+#define	SOAP_ENCODING_URI \
+	"http://schemas.xmlsoap.org/soap/encoding/"
+#define	SOAP_NAMESPACE_PREFIX				 "s"
+#define	UPNP_NAMESPACE_PREFIX				 "u"
 
 enum upnp_variable_types {
 	UPNP_VARIABLE_TYPE_UI1 = 0,
@@ -140,17 +150,10 @@ struct upnp_variable {
 	char				 *step;
 };
 
-enum upnp_argument_directions {
-	UPNP_ARGUMENT_DIRECTION_IN = 0,
-	UPNP_ARGUMENT_DIRECTION_OUT,
-	UPNP_ARGUMENT_DIRECTION_MAX,
-};
-
 #define	UPNP_ARGUMENT_FLAG_RETURN	(1<<0)
 
 struct upnp_argument {
 	char				*name;
-	enum upnp_argument_directions	 direction;
 	unsigned int			 flags;
 	enum upnp_variables		 related;
 };
@@ -179,11 +182,14 @@ enum upnp_actions {
 
 struct upnp_action {
 	char			*name;
-	struct upnp_argument 	*arguments;
+	unsigned int		 version, cin, cout;
+	struct upnp_argument 	*in;
+	struct upnp_argument 	*out;
 };
 
 struct upnp_service {
-	char			*type;
+	char			*nid;
+	struct upnp_nss		 nss;
 	char			*id;
 	char			*scpd;
 	char			*control;
@@ -193,9 +199,35 @@ struct upnp_service {
 };
 
 struct upnp_device {
-	char			*type;
+	char			*nid;
+	struct upnp_nss		 nss;
 	enum upnp_services	*services;
 	enum upnp_devices	*devices;
+};
+
+enum upnp_errors {
+	UPNP_ERROR_INVALID_ACTION = 0,
+	UPNP_ERROR_INVALID_ARGS,
+	UPNP_ERROR_ACTION_FAILED,
+	UPNP_ERROR_ARGUMENT_VALUE_INVALID,
+	UPNP_ERROR_ARGUMENT_VALUE_OUT_OF_RANGE,
+	UPNP_ERROR_OPTIONAL_ACTION_NOT_IMPLEMENTED,
+	UPNP_ERROR_OUT_OF_MEMORY,
+	UPNP_ERROR_HUMAN_INTERVENTION_REQUIRED,
+	UPNP_ERROR_STRING_ARGUMENT_TOO_LONG,
+	UPNP_ERROR_ACTION_NOT_AUTHORIZED,
+	UPNP_ERROR_SIGNATURE_FAILURE,
+	UPNP_ERROR_SIGNATURE_MISSING,
+	UPNP_ERROR_NOT_ENCRYPTED,
+	UPNP_ERROR_INVALID_SEQUENCE,
+	UPNP_ERROR_INVALID_CONTROL_URL,
+	UPNP_ERROR_NO_SUCH_SESSION,
+	UPNP_ERROR_MAX,
+};
+
+struct upnp_error {
+	unsigned int		 code;
+	char			*string;
 };
 
 void		 upnp_add_configid(xmlNodePtr, u_int32_t);
@@ -209,11 +241,19 @@ void		 upnp_add_service(xmlNodePtr, u_int32_t, enum upnp_services,
 void		 upnp_add_device(xmlNodePtr, u_int32_t, enum upnp_devices,
 		     struct evhttp *, struct ssdp_devices *,
 		     struct ssdp_services *);
-void		 upnp_xml(struct evhttp_request *, void *);
-void		 upnp_soap(struct evhttp_request *, void *);
+void		 upnp_add_xml(struct evbuffer *, xmlDocPtr);
+void		 upnp_content_length_header(struct evhttp_request *,
+		     struct evbuffer *);
+void		 upnp_content_type_header(struct evhttp_request *);
+void		 upnp_date_header(struct evhttp_request *);
+void		 upnp_server_header(struct evhttp_request *);
+void		 upnp_describe(struct evhttp_request *, void *);
+void		 upnp_soap_error(struct evhttp_request *, enum upnp_errors);
+void		 upnp_control(struct evhttp_request *, void *);
 void		 upnp_event(struct evhttp_request *, void *);
 
-const char	*upnp_version = UPNP_VERSION_STRING;
+extern struct utsname	 name;
+const char		*upnp_version = UPNP_VERSION_STRING;
 
 /* Used for parsing and generating URN NSS */
 const char	*upnp_type[UPNP_TYPE_MAX] = {
@@ -522,524 +562,414 @@ const struct upnp_variable	 upnp_variable[UPNP_VARIABLE_MAX] = {
 	},
 };
 
-/* UPnP action argument direction */
-const char	*upnp_argument_direction[UPNP_ARGUMENT_DIRECTION_MAX] = {
-	"in",
-	"out",
-};
-
 /* UPnP actions */
 const struct upnp_action	 upnp_action[UPNP_ACTION_MAX] = {
 	/* WANCommonInterfaceConfig */
 	{
 		"GetCommonLinkProperties",
+		1, 0, 4,
+		NULL,
 		(struct upnp_argument[]){
 			{
 				"NewWANAccessType",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_WAN_ACCESS_TYPE,
 			},
 			{
 				"NewLayer1UpstreamMaxBitRate",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_LAYER_1_UPSTREAM_MAX_BIT_RATE,
 			},
 			{
 				"NewLayer1DownstreamMaxBitRate",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_LAYER_1_DOWNSTREAM_MAX_BIT_RATE,
 			},
 			{
 				"NewPhysicalLinkStatus",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PHYSICAL_LINK_STATUS,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	/* WANIPConnection */
 	{
 		"SetConnectionType",
+		1, 1, 0,
 		(struct upnp_argument[]){
 			{
 				"NewConnectionType",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_CONNECTION_TYPE,
 			},
-			{
-				NULL,
-				0,
-				0,
-				0,
-			},
 		},
+		NULL,
 	},
 	{
 		"GetConnectionTypeInfo",
+		1, 0, 2,
+		NULL,
 		(struct upnp_argument[]){
 			{
 				"NewConnectionType",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_CONNECTION_TYPE,
 			},
 			{
 				"NewPossibleConnectionTypes",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_POSSIBLE_CONNECTION_TYPES,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"RequestConnection",
+		1, 0, 0,
+		NULL,
 		NULL,
 	},
 	{
 		"ForceTermination",
+		1, 0, 0,
+		NULL,
 		NULL,
 	},
 	{
 		"GetStatusInfo",
+		1, 0, 3,
+		NULL,
 		(struct upnp_argument[]){
 			{
 				"NewConnectionStatus",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_CONNECTION_STATUS,
 			},
 			{
 				"NewLastConnectionError",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_LAST_CONNECTION_ERROR,
 			},
 			{
 				"NewUptime",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_UPTIME,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"GetNATRSIPStatus",
+		1, 0, 2,
+		NULL,
 		(struct upnp_argument[]){
 			{
 				"NewRSIPAvailable",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_RSIP_AVAILABLE,
 			},
 			{
 				"NewNATEnabled",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_NAT_ENABLED,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"GetGenericPortMappingEntry",
+		1, 1, 8,
 		(struct upnp_argument[]){
 			{
 				"NewPortMappingIndex",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_NUMBER_OF_ENTRIES,
 			},
+		},
+		(struct upnp_argument[]){
 			{
 				"NewRemoteHost",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_REMOTE_HOST,
 			},
 			{
 				"NewExternalPort",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
 			{
 				"NewInternalPort",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_INTERNAL_PORT,
 			},
 			{
 				"NewInternalClient",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_INTERNAL_CLIENT,
 			},
 			{
 				"NewEnabled",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_ENABLED,
 			},
 			{
 				"NewPortMappingDescription",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_DESCRIPTION,
 			},
 			{
 				"NewLeaseDuration",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_LEASE_DURATION,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"GetSpecificPortMappingEntry",
+		1, 3, 5,
 		(struct upnp_argument[]){
 			{
 				"NewRemoteHost",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_REMOTE_HOST,
 			},
 			{
 				"NewExternalPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
+		},
+		(struct upnp_argument[]){
 			{
 				"NewInternalPort",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_INTERNAL_PORT,
 			},
 			{
 				"NewInternalClient",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_INTERNAL_CLIENT,
 			},
 			{
 				"NewEnabled",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_ENABLED,
 			},
 			{
 				"NewPortMappingDescription",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_DESCRIPTION,
 			},
 			{
 				"NewLeaseDuration",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_LEASE_DURATION,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"AddPortMapping",
+		1, 8, 0,
 		(struct upnp_argument[]){
 			{
 				"NewRemoteHost",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_REMOTE_HOST,
 			},
 			{
 				"NewExternalPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
 			{
 				"NewInternalPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_INTERNAL_PORT,
 			},
 			{
 				"NewInternalClient",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_INTERNAL_CLIENT,
 			},
 			{
 				"NewEnabled",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_ENABLED,
 			},
 			{
 				"NewPortMappingDescription",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_DESCRIPTION,
 			},
 			{
 				"NewLeaseDuration",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_LEASE_DURATION,
 			},
-			{
-				NULL,
-				0,
-				0,
-				0,
-			},
 		},
+		NULL,
 	},
 	{
 		"AddAnyPortMapping",
+		2, 8, 1,
 		(struct upnp_argument[]){
 			{
 				"NewRemoteHost",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_REMOTE_HOST,
 			},
 			{
 				"NewExternalPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
 			{
 				"NewInternalPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_INTERNAL_PORT,
 			},
 			{
 				"NewInternalClient",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_INTERNAL_CLIENT,
 			},
 			{
 				"NewEnabled",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_ENABLED,
 			},
 			{
 				"NewPortMappingDescription",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_DESCRIPTION,
 			},
 			{
 				"NewLeaseDuration",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_LEASE_DURATION,
 			},
+		},
+		(struct upnp_argument[]){
 			{
 				"NewReservedPort",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"DeletePortMapping",
+		1, 3, 0,
 		(struct upnp_argument[]){
 			{
 				"NewRemoteHost",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_REMOTE_HOST,
 			},
 			{
 				"NewExternalPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
-			{
-				NULL,
-				0,
-				0,
-				0,
-			},
 		},
+		NULL,
 	},
 	{
 		"DeletePortMappingRange",
+		2, 4, 0,
 		(struct upnp_argument[]){
 			{
 				"NewStartPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewEndPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
 			{
 				"NewManage",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_A_ARG_TYPE_MANAGE,
 			},
-			{
-				NULL,
-				0,
-				0,
-				0,
-			},
 		},
+		NULL,
 	},
 	{
 		"GetExternalIPAddress",
+		1, 0, 1,
+		NULL,
 		(struct upnp_argument[]){
 			{
 				"NewExternalIPAddress",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_EXTERNAL_IP_ADDRESS,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
 	{
 		"GetListOfPortMappings",
+		2, 5, 1,
 		(struct upnp_argument[]){
 			{
 				"NewStartPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewEndPort",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_EXTERNAL_PORT,
 			},
 			{
 				"NewProtocol",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_PROTOCOL,
 			},
 			{
 				"NewManage",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_A_ARG_TYPE_MANAGE,
 			},
 			{
 				"NewNumberOfPorts",
-				UPNP_ARGUMENT_DIRECTION_IN,
 				0,
 				UPNP_VARIABLE_PORT_MAPPING_NUMBER_OF_ENTRIES,
 			},
+		},
+		(struct upnp_argument[]){
 			{
 				"NewPortListing",
-				UPNP_ARGUMENT_DIRECTION_OUT,
 				0,
 				UPNP_VARIABLE_A_ARG_TYPE_PORT_LISTING,
-			},
-			{
-				NULL,
-				0,
-				0,
-				0,
 			},
 		},
 	},
@@ -1048,13 +978,16 @@ const struct upnp_action	 upnp_action[UPNP_ACTION_MAX] = {
 /* UPnP services */
 const struct upnp_service	 upnp_service[UPNP_SERVICE_MAX] = {
 	{
-		UPNP_TYPE_URN(UPNP_SCHEMA_NID, UPNP_SERVICE_TYPE,
-		    "WANCommonInterfaceConfig",
-		    UPNP_VERSION_WAN_COMMON_INTERFACE_CONFIG),
+		UPNP_SCHEMA_NID,
+		{
+			UPNP_TYPE_SERVICE,
+			"WANCommonInterfaceConfig",
+			UPNP_VERSION_WAN_COMMON_INTERFACE_CONFIG,
+		},
 		UPNP_SERVICE_ID_URN(UPNP_NID, "WANCommonIFC", 1),
-		NULL,
-		NULL,
-		NULL,
+		"/describe/WANCommonInterfaceConfig.xml",
+		"/control/WANCommonInterfaceConfig",
+		"/event/WANCommonInterfaceConfig",
 		(enum upnp_actions[]){
 			UPNP_ACTION_GET_COMMON_LINK_PROPERTIES,
 			UPNP_ACTION_EOL,
@@ -1068,12 +1001,16 @@ const struct upnp_service	 upnp_service[UPNP_SERVICE_MAX] = {
 		},
 	},
 	{
-		UPNP_TYPE_URN(UPNP_SCHEMA_NID, UPNP_SERVICE_TYPE,
-		    "WANIPConnection", UPNP_VERSION_WAN_IP_CONNECTION),
+		UPNP_SCHEMA_NID,
+		{
+			UPNP_TYPE_SERVICE,
+			"WANIPConnection",
+			UPNP_VERSION_WAN_IP_CONNECTION,
+		},
 		UPNP_SERVICE_ID_URN(UPNP_NID, "WANIPConn", 1),
-		NULL,
-		NULL,
-		NULL,
+		"/describe/WANIPConnection.xml",
+		"/control/WANIPConnection",
+		"/event/WANIPConnection",
 		(enum upnp_actions[]){
 			UPNP_ACTION_SET_CONNECTION_TYPE,
 			UPNP_ACTION_GET_CONNECTION_TYPE_INFO,
@@ -1128,9 +1065,12 @@ const struct upnp_service	 upnp_service[UPNP_SERVICE_MAX] = {
 /* UPnP devices */
 const struct upnp_device	upnp_device[UPNP_DEVICE_MAX] = {
 	{
-		UPNP_TYPE_URN(UPNP_SCHEMA_NID, UPNP_DEVICE_TYPE,
-		    "InternetGatewayDevice",
-		    UPNP_VERSION_INTERNET_GATEWAY_DEVICE),
+		UPNP_SCHEMA_NID,
+		{
+			UPNP_TYPE_DEVICE,
+			"InternetGatewayDevice",
+			UPNP_VERSION_INTERNET_GATEWAY_DEVICE,
+		},
 		NULL,
 		(enum upnp_devices[]){
 			UPNP_DEVICE_WAN_DEVICE,
@@ -1138,8 +1078,12 @@ const struct upnp_device	upnp_device[UPNP_DEVICE_MAX] = {
 		},
 	},
 	{
-		UPNP_TYPE_URN(UPNP_SCHEMA_NID, UPNP_DEVICE_TYPE,
-		    "WANDevice", UPNP_VERSION_WAN_DEVICE),
+		UPNP_SCHEMA_NID,
+		{
+			UPNP_TYPE_DEVICE,
+			"WANDevice",
+			UPNP_VERSION_WAN_DEVICE,
+		},
 		(enum upnp_services[]){
 			UPNP_SERVICE_WAN_COMMON_INTERFACE_CONFIG,
 			UPNP_SERVICE_EOL,
@@ -1150,14 +1094,38 @@ const struct upnp_device	upnp_device[UPNP_DEVICE_MAX] = {
 		},
 	},
 	{
-		UPNP_TYPE_URN(UPNP_SCHEMA_NID, UPNP_DEVICE_TYPE,
-		    "WANConnectionDevice", UPNP_VERSION_WAN_CONNECTION_DEVICE),
+		UPNP_SCHEMA_NID,
+		{
+			UPNP_TYPE_DEVICE,
+			"WANConnectionDevice",
+			UPNP_VERSION_WAN_CONNECTION_DEVICE,
+		},
 		(enum upnp_services[]){
 			UPNP_SERVICE_WAN_IP_CONNECTION,
 			UPNP_SERVICE_EOL,
 		},
 		NULL,
 	},
+};
+
+/* UPnP errors */
+const struct upnp_error		 upnp_error[UPNP_ERROR_MAX] = {
+	{ 401, "Invalid Action" },
+	{ 402, "Invalid Args" },
+	{ 501, "Action Failed" },
+	{ 600, "Argument Value Invalid" },
+	{ 601, "Argument Value Out of Range" },
+	{ 602, "Optional Action Not Implemented" },
+	{ 603, "Out of Memory" },
+	{ 604, "Human Intervention Required" },
+	{ 605, "String Argument Too Long" },
+	{ 606, "Action not authorized" },
+	{ 607, "Signature failure" },
+	{ 608, "Signature missing" },
+	{ 609, "Not encrypted" },
+	{ 610, "Invalid sequence" },
+	{ 611, "Invalid control URL" },
+	{ 612, "No such session" },
 };
 
 /* Return the string representation of the UPnP NSS structure */
@@ -1268,19 +1236,31 @@ upnp_add_action(xmlNodePtr node, const struct upnp_action *parent)
 {
 	xmlNodePtr			 action, arguments, argument;
 	const struct upnp_argument	*arg;
+	unsigned int			 i;
 
 	action = xmlNewChild(node, NULL, "action", NULL);
 
 	xmlNewChild(action, NULL, "name", parent->name);
 
-	if (parent->arguments) {
+	if (parent->cin || parent->cout) {
 		arguments = xmlNewChild(action, NULL, "argumentList", NULL);
-		for (arg = parent->arguments; arg->name; arg++) {
+
+		for (i = 0, arg = parent->in; i < parent->cin; i++, arg++) {
 			argument = xmlNewChild(arguments, NULL, "argument",
 			    NULL);
 			xmlNewChild(argument, NULL, "name", arg->name);
-			xmlNewChild(argument, NULL, "direction",
-			    upnp_argument_direction[arg->direction]);
+			xmlNewChild(argument, NULL, "direction", "in");
+			if (arg->flags & UPNP_ARGUMENT_FLAG_RETURN)
+				xmlNewChild(argument, NULL, "retval", NULL);
+			xmlNewChild(argument, NULL, "relatedStateVariable",
+			    upnp_variable[arg->related].name);
+		}
+
+		for (i = 0, arg = parent->out; i < parent->cout; i++, arg++) {
+			argument = xmlNewChild(arguments, NULL, "argument",
+			    NULL);
+			xmlNewChild(argument, NULL, "name", arg->name);
+			xmlNewChild(argument, NULL, "direction", "out");
 			if (arg->flags & UPNP_ARGUMENT_FLAG_RETURN)
 				xmlNewChild(argument, NULL, "retval", NULL);
 			xmlNewChild(argument, NULL, "relatedStateVariable",
@@ -1369,7 +1349,7 @@ upnp_service_xml(u_int32_t version, enum upnp_services service)
 		upnp_add_variable(variables,
 		    &upnp_variable[upnp_service[service].variables[i]]);
 
-	xmlSaveFormatFileEnc("-", document, NULL, 1);
+	xmlSaveFormatFileEnc("-", document, NULL, XML_INDENT_TREE);
 
 	return (document);
 }
@@ -1381,33 +1361,43 @@ upnp_add_service(xmlNodePtr node, u_int32_t version, enum upnp_services type,
 {
 	xmlNodePtr		 service;
 	struct ssdp_service	*ssdp;
-
-	service = xmlNewChild(node, NULL, "service", NULL);
-
-	xmlNewChild(service, NULL, "serviceType", upnp_service[type].type);
-	xmlNewChild(service, NULL, "serviceId", upnp_service[type].id);
-	xmlNewChild(service, NULL, "SCPDURL", upnp_service[type].scpd);
-	xmlNewChild(service, NULL, "controlURL", upnp_service[type].control);
-	xmlNewChild(service, NULL, "eventSubURL", upnp_service[type].event);
+	char			*urn;
 
 	/* Create SSDP service search struct */
 	if ((ssdp = calloc(1, sizeof(struct ssdp_service))) == NULL)
 		fatal("calloc");
 
 	ssdp->parent = parent;
-	if ((ssdp->urn = urn_from_string(upnp_service[type].type)) == NULL)
-		fatalx("urn_from_string");
-	if ((ssdp->nss = upnp_nss_from_string(ssdp->urn->nss)) == NULL)
-		fatalx("upnp_nss_from_string");
 	ssdp->document = upnp_service_xml(version, type);
+	if ((ssdp->nss = calloc(1, sizeof(struct upnp_nss))) == NULL)
+		fatal("calloc");
+	memcpy(ssdp->nss, &upnp_service[type].nss, sizeof(struct upnp_nss));
+	if ((ssdp->urn = calloc(1, sizeof(struct urn))) == NULL)
+		fatal("calloc");
+	if ((ssdp->urn->nss = upnp_nss_to_string(ssdp->nss)) == NULL)
+		fatalx("upnp_nss_to_string");
+	if ((ssdp->urn->nid = strdup(upnp_service[type].nid)) == NULL)
+		fatal("strdup");
+
+	if ((urn = urn_to_string(ssdp->urn)) == NULL)
+		fatalx("urn_to_string");
+
+	service = xmlNewChild(node, NULL, "service", NULL);
+
+	xmlNewChild(service, NULL, "serviceType", urn);
+	xmlNewChild(service, NULL, "serviceId", upnp_service[type].id);
+	xmlNewChild(service, NULL, "SCPDURL", upnp_service[type].scpd);
+	xmlNewChild(service, NULL, "controlURL", upnp_service[type].control);
+	xmlNewChild(service, NULL, "eventSubURL", upnp_service[type].event);
+
+	free(urn);
 
 	TAILQ_INSERT_TAIL(services, ssdp, entry);
 
-#if 0
-	evhttp_set_cb(http, upnp_service[type].scpd, upnp_xml, ssdp->document);
-	evhttp_set_cb(http, upnp_service[type].control, upnp_soap, NULL);
+	evhttp_set_cb(http, upnp_service[type].scpd, upnp_describe,
+	    ssdp->document);
+	evhttp_set_cb(http, upnp_service[type].control, upnp_control, NULL);
 	evhttp_set_cb(http, upnp_service[type].event, upnp_event, NULL);
-#endif
 }
 
 void
@@ -1417,22 +1407,39 @@ upnp_add_device(xmlNodePtr node, u_int32_t version, enum upnp_devices type,
 {
 	xmlNodePtr		 device, icons, servicelist, devicelist;
 	uuid_t			*uuid;
-	char			*str, *ptr = NULL;
+	char			*str, *ptr = NULL, *urn;
 	struct ssdp_device	*ssdp;
 	int			 i;
 
+	/* Create SSDP device search struct */
+	if ((ssdp = calloc(1, sizeof(struct ssdp_device))) == NULL)
+		fatal("calloc");
+
+	if ((ssdp->nss = calloc(1, sizeof(struct upnp_nss))) == NULL)
+		fatal("calloc");
+	memcpy(ssdp->nss, &upnp_device[type].nss, sizeof(struct upnp_nss));
+	if ((ssdp->urn = calloc(1, sizeof(struct urn))) == NULL)
+		fatal("calloc");
+	if ((ssdp->urn->nss = upnp_nss_to_string(ssdp->nss)) == NULL)
+		fatalx("upnp_nss_to_string");
+	if ((ssdp->urn->nid = strdup(upnp_device[type].nid)) == NULL)
+		fatal("strdup");
+
+	if ((urn = urn_to_string(ssdp->urn)) == NULL)
+		fatalx("urn_to_string");
+
 	device = xmlNewChild(node, NULL, "device", NULL);
 
-	xmlNewChild(device, NULL, "deviceType", upnp_device[type].type);
+	xmlNewChild(device, NULL, "deviceType", urn);
 
 	/* FIXME */
-	xmlNewChild(device, NULL, "friendlyName", NULL);
-	xmlNewChild(device, NULL, "manufacturer", NULL);
-	xmlNewChild(device, NULL, "modelDescription", NULL);
-	xmlNewChild(device, NULL, "modelName", NULL);
-	xmlNewChild(device, NULL, "modelNumber", NULL);
-	xmlNewChild(device, NULL, "modelURL", NULL);
-	xmlNewChild(device, NULL, "serialNumber", NULL);
+	xmlNewChild(device, NULL, "friendlyName", "test");
+	xmlNewChild(device, NULL, "manufacturer", "test");
+	xmlNewChild(device, NULL, "modelDescription", "test");
+	xmlNewChild(device, NULL, "modelName", "test");
+	xmlNewChild(device, NULL, "modelNumber", "test");
+	xmlNewChild(device, NULL, "modelURL", "test");
+	xmlNewChild(device, NULL, "serialNumber", "test");
 
 	if (uuid_create(&uuid) != 0)
 		fatalx("uuid_create");
@@ -1455,18 +1462,12 @@ upnp_add_device(xmlNodePtr node, u_int32_t version, enum upnp_devices type,
 		fatalx("uuid_destroy");
 
 	/* FIXME */
-	xmlNewChild(device, NULL, "UPC", NULL);
+	xmlNewChild(device, NULL, "UPC", "test");
 	icons = xmlNewChild(device, NULL, "iconList", NULL);
 
-	/* Create SSDP device search struct */
-	if ((ssdp = calloc(1, sizeof(struct ssdp_device))) == NULL)
-		fatal("calloc");
-
 	ssdp->uuid = str;
-	if ((ssdp->urn = urn_from_string(upnp_device[type].type)) == NULL)
-		fatalx("urn_from_string");
-	if ((ssdp->nss = upnp_nss_from_string(ssdp->urn->nss)) == NULL)
-		fatalx("upnp_nss_from_string");
+
+	free(urn);
 
 	TAILQ_INSERT_TAIL(devices, ssdp, entry);
 
@@ -1522,83 +1523,405 @@ upnp_root_device(u_int32_t version, enum upnp_devices type,
 	upnp_add_device(node, version, type, http, &root->devices,
 	    &root->services);
 
-	evhttp_set_cb(http, "/describe/root.xml", upnp_xml, root->document);
+	evhttp_set_cb(http, "/describe/root.xml", upnp_describe,
+	    root->document);
 
 	return (root);
 }
 
+/* Add an XML document to an evbuffer */
+void
+upnp_add_xml(struct evbuffer *buffer, xmlDocPtr document)
+{
+	xmlChar	*xml = NULL;
+	int	 len = 0;
+
+	xmlDocDumpFormatMemory(document, &xml, &len, XML_INDENT_TREE);
+	evbuffer_add(buffer, xml, len);
+	xmlFree(xml);
+}
+
+/* Add Content-Length header */
+void
+upnp_content_length_header(struct evhttp_request *req, struct evbuffer *buffer)
+{
+	size_t	 len;
+	char	*header;
+
+	len = snprintf(NULL, 0, "%ld", EVBUFFER_LENGTH(buffer));
+	if ((header = calloc(len + 1, sizeof(char))) == NULL)
+		fatal("calloc");
+	snprintf(header, len + 1, "%ld", EVBUFFER_LENGTH(buffer));
+	evhttp_add_header(req->output_headers, "Content-Length",
+	    header);
+	free(header);
+}
+
+/* Add Content-Type header */
+void
+upnp_content_type_header(struct evhttp_request *req)
+{
+	evhttp_add_header(req->output_headers, "Content-Type",
+	    "text/xml; charset=\"utf-8\"");
+}
+
+/* Add Date header */
+void
+upnp_date_header(struct evhttp_request *req)
+{
+	time_t		 t;
+	struct tm	*tmp;
+	char		 date[30]; /* "Mon, 01 Jan 1970 00:00:00 GMT" + '\0' */
+
+	t = time(NULL);
+	if ((tmp = localtime(&t)) == NULL)
+		fatal("localtime");
+
+	if (strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", tmp) == 0)
+		fatalx("strftime");
+
+	evhttp_add_header(req->output_headers, "Date", date);
+}
+
+/* Add Server header */
+void
+upnp_server_header(struct evhttp_request *req)
+{
+	extern char	*__progname;
+	size_t		 len;
+	char		*str;
+
+	len = snprintf(NULL, 0, "%s/%s UPnP/%s %s/1.0", name.sysname,
+	    name.release, upnp_version, __progname);
+	if ((str = calloc(len + 1, sizeof(char))) == NULL)
+		fatal("calloc");
+	snprintf(str, len + 1, "%s/%s UPnP/%s %s/1.0", name.sysname,
+	    name.release, upnp_version, __progname);
+
+	evhttp_add_header(req->output_headers, "Server", str);
+
+	free(str);
+}
+
 /* Serve XML description */
 void
-upnp_xml(struct evhttp_request *req, void *arg)
+upnp_describe(struct evhttp_request *req, void *arg)
 {
 	xmlDocPtr	 document = (xmlDocPtr)arg;
 	struct evbuffer	*output;
-	xmlChar		*xml = NULL;
-	int		 len = 0;
-	char		*header;
-	int		 hlen;
+
+	if (req->type != EVHTTP_REQ_GET) {
+		evhttp_add_header(req->output_headers, "Allow", "GET");
+		evhttp_send_reply(req, 405, "Bad Method", NULL);
+		return;
+	}
 
 	/* Check Host and Accept-Language headers? */
 
-	switch (req->type) {
-	case EVHTTP_REQ_GET:
-		log_debug("GET %s", evhttp_request_uri(req));
+	log_debug("GET %s", evhttp_request_uri(req));
 
-		if ((output = evbuffer_new()) == NULL)
-			return;
+	if ((output = evbuffer_new()) == NULL)
+		return;
 
-		xmlDocDumpFormatMemory(document, &xml, &len, 1);
-		evbuffer_add(output, xml, len);
-		xmlFree(xml);
+	upnp_add_xml(output, document);
 
-		/* Add Content-Language header if Accept-Language is present */
+	/* Add Content-Language header if Accept-Language is present */
 
-		hlen = snprintf(NULL, 0, "%d", len);
-		if ((header = calloc(hlen + 1, sizeof(char))) == NULL)
-			fatal("calloc");
-		snprintf(header, hlen + 1, "%d", len);
-		evhttp_add_header(req->output_headers, "Content-Length",
-		    header);
-		free(header);
+	upnp_content_length_header(req, output);
+	upnp_content_type_header(req);
+	upnp_date_header(req);
 
-		evhttp_add_header(req->output_headers, "Content-Type",
-		    "text/xml");
-
-		evhttp_send_reply(req, HTTP_OK, "OK", output);
-		evbuffer_free(output);
-		break;
-	default:
-		evhttp_add_header(req->output_headers, "Allow", "GET");
-		evhttp_send_reply(req, 405, "Bad Method", NULL);
-		break;
-	}
+	evhttp_send_reply(req, HTTP_OK, "OK", output);
+	evbuffer_free(output);
 }
 
+/* Generate and return a UPnP SOAP error */
 void
-upnp_soap(struct evhttp_request *req, void *arg)
+upnp_soap_error(struct evhttp_request *req, enum upnp_errors error)
 {
 	xmlDocPtr	 document;
-	xmlNodePtr	 envelope;
+	xmlNodePtr	 node;
 	xmlNsPtr	 ns;
+	size_t		 len;
+	char		*str;
+	struct evbuffer	*output;
 
-	switch (req->type) {
-	case EVHTTP_REQ_POST:
-		document = xmlNewDoc("1.0");
-		envelope = xmlNewNode(NULL, "Envelope");
-		xmlDocSetRootElement(document, envelope);
+	document = xmlNewDoc("1.0");
+	node = xmlNewNode(NULL, "Envelope");
+	xmlDocSetRootElement(document, node);
 
-		ns = xmlNewNs(envelope, "http://schemas.xmlsoap.org/soap/envelope/", "s");
-		xmlSetNs(envelope, ns);
-		xmlNewProp(envelope, "encodingStyle", "http://schemas.xmlsoap.org/soap/encoding/");
-		xmlNewChild(envelope, NULL, "Body", NULL);
+	ns = xmlNewNs(node, SOAP_ENVELOPE_URI, SOAP_NAMESPACE_PREFIX);
+	xmlSetNs(node, ns);
+	xmlNewNsProp(node, ns, "encodingStyle", SOAP_ENCODING_URI);
 
-		/* FIXME */
-		break;
-	default:
+	node = xmlNewChild(node, NULL, "Body", NULL);
+
+	node = xmlNewChild(node, NULL, "Fault", NULL);
+
+	/* Make the namespace unqualified for these three children */
+	xmlSetNs(xmlNewChild(node, NULL, "faultcode",
+	    SOAP_NAMESPACE_PREFIX ":Client"), NULL);
+	xmlSetNs(xmlNewChild(node, NULL, "faultstring", "UPnPError"), NULL);
+	node = xmlNewChild(node, NULL, "detail", NULL);
+	xmlSetNs(node, NULL);
+
+	node = xmlNewChild(node, NULL, "UPnPError", NULL);
+	ns = xmlNewNs(node, UPNP_CONTROL_SCHEMA_URN, NULL);
+	xmlSetNs(node, ns);
+
+	len = snprintf(NULL, 0, "%d", upnp_error[error].code);
+	if ((str = calloc(len + 1, sizeof(char))) == NULL)
+		fatal("calloc");
+	snprintf(str, len + 1, "%d", upnp_error[error].code);
+
+	xmlNewChild(node, NULL, "errorCode", str);
+	xmlNewChild(node, NULL, "errorDescription", upnp_error[error].string);
+
+	free(str);
+
+	if ((output = evbuffer_new()) == NULL) {
+		xmlFreeDoc(document);
+		return;
+	}
+
+	upnp_add_xml(output, document);
+	xmlFreeDoc(document);
+
+	upnp_content_length_header(req, output);
+	upnp_content_type_header(req);
+	upnp_date_header(req);
+
+	evhttp_send_reply(req, 500, "Internal Server Error", output);
+	evbuffer_free(output);
+}
+
+/* UPnP control (SOAP) */
+void
+upnp_control(struct evhttp_request *req, void *arg)
+{
+	const char			*header;
+	char				*copy, *p, *service, *action;
+	struct urn			*urn;
+	struct upnp_nss			*nss;
+	unsigned int			 i, j;
+	xmlDocPtr			 document;
+	xmlNodePtr			 root, body, request, argument;
+	xmlChar				*encoding;
+	xmlNsPtr			 ns;
+	const struct upnp_action	*a;
+
+
+	if (req->type != EVHTTP_REQ_POST) {
 		evhttp_add_header(req->output_headers, "Allow", "POST");
 		evhttp_send_reply(req, 405, "Bad Method", NULL);
-		break;
+		return;
 	}
+
+	/* Content-Type should be present and set to "text/xml" */
+	if ((header = evhttp_find_header(req->input_headers,
+	    "content-type")) == NULL ||
+	    strcmp(header, "text/xml; charset=\"utf-8\"")) {
+		evhttp_send_reply(req, 415, "Unsupported Media Type", NULL);
+		return;
+	}
+
+	if ((header = evhttp_find_header(req->input_headers,
+	    "soapaction")) == NULL)
+		goto bad;
+
+	if ((copy = strdup(header)) == NULL)
+		fatal("strdup");
+
+	p = copy;
+
+	if (*p != '"' || strlen(++p) == 0) {
+		free(copy);
+		goto bad;
+	}
+
+	service = p;
+
+	if ((p = strchr(p, '#')) == NULL) {
+		free(copy);
+		goto bad;
+	}
+
+	/* service is now NULL-terminated */
+	*p = '\0';
+
+	action = ++p;
+
+	if (strlen(service) == 0 || (p = strchr(p, '"')) == NULL ||
+	    strlen(p) != 1) {
+		free(copy);
+		goto bad;
+	}
+
+	/* action is now NULL-terminated */
+	*p = '\0';
+
+	if (strlen(action) == 0 || (urn = urn_from_string(service)) == NULL) {
+		free(copy);
+		goto bad;
+	}
+
+	if ((nss = upnp_nss_from_string(urn->nss)) == NULL) {
+		urn_free(urn);
+		free(copy);
+		goto bad;
+	}
+
+	/* At this point we have the service URN and intended action */
+	if ((document = xmlReadMemory(EVBUFFER_DATA(req->input_buffer),
+	    EVBUFFER_LENGTH(req->input_buffer), NULL, NULL, 0)) == NULL) {
+		upnp_nss_free(nss);
+		urn_free(urn);
+		free(copy);
+		goto bad;
+	}
+
+	xmlSaveFormatFileEnc("-", document, NULL, XML_INDENT_TREE);
+
+	root = xmlDocGetRootElement(document);
+
+	for (ns = root->nsDef; ns; ns = ns->next)
+		if (!strcmp(ns->href, SOAP_ENVELOPE_URI))
+			break;
+	encoding = xmlGetNsProp(root, "encodingStyle", SOAP_ENVELOPE_URI);
+	for (body = root->children; body; body = body->next)
+		if (body->type == XML_ELEMENT_NODE &&
+		    !strcmp(body->name, "Body"))
+			break;
+
+	/* Validate the main SOAP envelope */
+	if (ns == NULL || strcmp(root->name, "Envelope") || root->ns != ns ||
+	    strcmp(encoding, SOAP_ENCODING_URI) || body == NULL ||
+	    body->ns != ns) {
+		log_warnx("malformed envelope");
+		xmlFreeDoc(document);
+		xmlFree(encoding);
+		upnp_nss_free(nss);
+		urn_free(urn);
+		free(copy);
+		goto bad;
+	}
+
+	xmlFree(encoding);
+
+	for (request = body->children; request; request = request->next)
+		if (request->type == XML_ELEMENT_NODE)
+			break;
+	if (request)
+		for (ns = request->nsDef; ns; ns = ns->next)
+			if (!strcmp(ns->href, service))
+				break;
+
+	/* Validate the SOAP action */
+	if (ns == NULL || request == NULL || strcmp(request->name, action) ||
+	    request->ns != ns) {
+		log_warnx("malformed request");
+		xmlFreeDoc(document);
+		upnp_nss_free(nss);
+		urn_free(urn);
+		free(copy);
+		goto bad;
+	}
+
+	for (i = 0; i < nitems(upnp_service); i++)
+		if (!strcmp(urn->nid, upnp_service[i].nid) &&
+		    nss->type == upnp_service[i].nss.type &&
+		    !strcmp(nss->name, upnp_service[i].nss.name) &&
+		    nss->version <= upnp_service[i].nss.version)
+			break;
+
+	if (i != nitems(upnp_service))
+		for (j = 0; upnp_service[i].actions[j] != UPNP_ACTION_EOL;
+		    j++) {
+			a = &upnp_action[upnp_service[i].actions[j]];
+
+			if (!strcmp(action, a->name) &&
+			    nss->version >= a->version)
+				break;
+		}
+
+
+	/* Can't find the service or action */
+	if (i == nitems(upnp_service) ||
+	    upnp_service[i].actions[j] == UPNP_ACTION_EOL) {
+		log_warnx("invalid action");
+		upnp_soap_error(req, UPNP_ERROR_INVALID_ACTION);
+		xmlFreeDoc(document);
+		upnp_nss_free(nss);
+		urn_free(urn);
+		free(copy);
+		return;
+	}
+
+	/* First argument in action definition */
+	i = 0;
+
+	/* Find first element node */
+	for (argument = request->children; argument; argument = argument->next)
+		if (argument->type == XML_ELEMENT_NODE)
+			break;
+
+	/* Check each given argument against the one in the definition */
+	while (argument && i < a->cin) {
+
+		/* Name doesn't match */
+		if (strcmp(argument->name, a->in[i].name))
+			break;
+
+		/* Check there is a sole text child node under the argument */
+		if (argument->children == NULL ||
+		    argument->children->type != XML_TEXT_NODE ||
+		    argument->children->next != NULL)
+			break;
+
+		/* Find next element node */
+		for (argument = argument->next; argument;
+		    argument = argument->next)
+			if (argument->type == XML_ELEMENT_NODE)
+				break;
+
+		/* Advance to next argument in action definition */
+		i++;
+	}
+
+	/* Should be NULL && a->cin respectively */
+	if (argument || i < a->cin) {
+		log_warnx("invalid arguments");
+		upnp_soap_error(req, UPNP_ERROR_INVALID_ARGS);
+		xmlFreeDoc(document);
+		upnp_nss_free(nss);
+		urn_free(urn);
+		free(copy);
+		return;
+	}
+
+	log_debug("found it!");
+
+	xmlFreeDoc(document);
+
+#if 0
+	document = xmlNewDoc("1.0");
+	envelope = xmlNewNode(NULL, "Envelope");
+	xmlDocSetRootElement(document, envelope);
+
+	ns = xmlNewNs(envelope, SOAP_ENVELOPE_URI, SOAP_NAMESPACE_PREFIX);
+	xmlSetNs(envelope, ns);
+	xmlNewProp(envelope, "encodingStyle", SOAP_ENCODING_URI);
+	xmlNewChild(envelope, NULL, "Body", NULL);
+#endif
+
+	upnp_nss_free(nss);
+	urn_free(urn);
+	free(copy);
+
+	return;
+
+bad:
+	evhttp_send_reply(req, 400, "Bad Request", NULL);
 }
 
 void
