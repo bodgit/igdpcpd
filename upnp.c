@@ -1548,12 +1548,12 @@ upnp_content_length_header(struct evhttp_request *req, struct evbuffer *buffer)
 	size_t	 len;
 	char	*header;
 
-	len = snprintf(NULL, 0, "%ld", EVBUFFER_LENGTH(buffer));
+	len = snprintf(NULL, 0, "%ld", evbuffer_get_length(buffer));
 	if ((header = calloc(len + 1, sizeof(char))) == NULL)
 		fatal("calloc");
-	snprintf(header, len + 1, "%ld", EVBUFFER_LENGTH(buffer));
-	evhttp_add_header(req->output_headers, "Content-Length",
-	    header);
+	snprintf(header, len + 1, "%ld", evbuffer_get_length(buffer));
+	evhttp_add_header(evhttp_request_get_output_headers(req),
+	    "Content-Length", header);
 	free(header);
 }
 
@@ -1561,8 +1561,8 @@ upnp_content_length_header(struct evhttp_request *req, struct evbuffer *buffer)
 void
 upnp_content_type_header(struct evhttp_request *req)
 {
-	evhttp_add_header(req->output_headers, "Content-Type",
-	    "text/xml; charset=\"utf-8\"");
+	evhttp_add_header(evhttp_request_get_output_headers(req),
+	    "Content-Type", "text/xml; charset=\"utf-8\"");
 }
 
 /* Add Date header */
@@ -1580,7 +1580,8 @@ upnp_date_header(struct evhttp_request *req)
 	if (strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", tmp) == 0)
 		fatalx("strftime");
 
-	evhttp_add_header(req->output_headers, "Date", date);
+	evhttp_add_header(evhttp_request_get_output_headers(req), "Date",
+	    date);
 }
 
 /* Add Server header */
@@ -1598,7 +1599,8 @@ upnp_server_header(struct evhttp_request *req)
 	snprintf(str, len + 1, "%s/%s UPnP/%s %s/1.0", name.sysname,
 	    name.release, upnp_version, __progname);
 
-	evhttp_add_header(req->output_headers, "Server", str);
+	evhttp_add_header(evhttp_request_get_output_headers(req), "Server",
+	    str);
 
 	free(str);
 }
@@ -1610,15 +1612,16 @@ upnp_describe(struct evhttp_request *req, void *arg)
 	xmlDocPtr	 document = (xmlDocPtr)arg;
 	struct evbuffer	*output;
 
-	if (req->type != EVHTTP_REQ_GET) {
-		evhttp_add_header(req->output_headers, "Allow", "GET");
+	if (evhttp_request_get_command(req) != EVHTTP_REQ_GET) {
+		evhttp_add_header(evhttp_request_get_output_headers(req),
+		    "Allow", "GET");
 		evhttp_send_reply(req, 405, "Bad Method", NULL);
 		return;
 	}
 
 	/* Check Host and Accept-Language headers? */
 
-	log_debug("GET %s", evhttp_request_uri(req));
+	log_debug("GET %s", evhttp_request_get_uri(req));
 
 	if ((output = evbuffer_new()) == NULL)
 		return;
@@ -1711,21 +1714,22 @@ upnp_control(struct evhttp_request *req, void *arg)
 	const struct upnp_action	*a;
 
 
-	if (req->type != EVHTTP_REQ_POST) {
-		evhttp_add_header(req->output_headers, "Allow", "POST");
+	if (evhttp_request_get_command(req) != EVHTTP_REQ_POST) {
+		evhttp_add_header(evhttp_request_get_output_headers(req),
+		    "Allow", "POST");
 		evhttp_send_reply(req, 405, "Bad Method", NULL);
 		return;
 	}
 
 	/* Content-Type should be present and set to "text/xml" */
-	if ((header = evhttp_find_header(req->input_headers,
+	if ((header = evhttp_find_header(evhttp_request_get_input_headers(req),
 	    "content-type")) == NULL ||
 	    strcmp(header, "text/xml; charset=\"utf-8\"")) {
 		evhttp_send_reply(req, 415, "Unsupported Media Type", NULL);
 		return;
 	}
 
-	if ((header = evhttp_find_header(req->input_headers,
+	if ((header = evhttp_find_header(evhttp_request_get_input_headers(req),
 	    "soapaction")) == NULL)
 		goto bad;
 
@@ -1772,8 +1776,8 @@ upnp_control(struct evhttp_request *req, void *arg)
 	}
 
 	/* At this point we have the service URN and intended action */
-	if ((document = xmlReadMemory(EVBUFFER_DATA(req->input_buffer),
-	    EVBUFFER_LENGTH(req->input_buffer), NULL, NULL, 0)) == NULL) {
+	if ((document = xmlReadMemory(evbuffer_pullup(evhttp_request_get_input_buffer(req), -1),
+	    evbuffer_get_length(evhttp_request_get_input_buffer(req)), NULL, NULL, 0)) == NULL) {
 		upnp_nss_free(nss);
 		urn_free(urn);
 		free(copy);
@@ -1929,18 +1933,15 @@ upnp_event(struct evhttp_request *req, void *arg)
 {
 	struct evkeyval	*header;
 
-	switch (req->type) {
-	default:
-		log_debug("%d %s HTTP/%d.%d", req->type, evhttp_request_uri(req), req->major, req->minor);
+	log_debug("%d %s", evhttp_request_get_command(req),
+	    evhttp_request_get_uri(req));
 
-		for (header = TAILQ_FIRST(req->input_headers); header;
-		    header = TAILQ_NEXT(header, next))
-			log_debug("%s: %s", header->key, header->value);
+	for (header = TAILQ_FIRST(evhttp_request_get_input_headers(req));
+	    header; header = TAILQ_NEXT(header, next))
+		log_debug("%s: %s", header->key, header->value);
 		
-		log_debug("%.*s", EVBUFFER_LENGTH(req->input_buffer), EVBUFFER_DATA(req->input_buffer));
-		evhttp_send_reply(req, 500, "Internal Server Error", NULL);
-		break;
-	}
+	log_debug("%.*s", evbuffer_get_length(evhttp_request_get_input_buffer(req)), evbuffer_pullup(evhttp_request_get_input_buffer(req), -1));
+	evhttp_send_reply(req, 500, "Internal Server Error", NULL);
 }
 
 void
@@ -1948,16 +1949,13 @@ upnp_debug(struct evhttp_request *req, void *arg)
 {
 	struct evkeyval	*header;
 
-	switch (req->type) {
-	default:
-		log_debug("%d %s HTTP/%d.%d", req->type, evhttp_request_uri(req), req->major, req->minor);
+	log_debug("%d %s", evhttp_request_get_command(req),
+	    evhttp_request_get_uri(req));
 
-		for (header = TAILQ_FIRST(req->input_headers); header;
-		    header = TAILQ_NEXT(header, next))
-			log_debug("%s: %s", header->key, header->value);
-		
-		log_debug("%.*s", EVBUFFER_LENGTH(req->input_buffer), EVBUFFER_DATA(req->input_buffer));
-		evhttp_send_reply(req, 500, "Internal Server Error", NULL);
-		break;
-	}
+	for (header = TAILQ_FIRST(evhttp_request_get_input_headers(req));
+	    header; header = TAILQ_NEXT(header, next))
+		log_debug("%s: %s", header->key, header->value);
+	
+	log_debug("%.*s", evbuffer_get_length(evhttp_request_get_input_buffer(req)), evbuffer_pullup(evhttp_request_get_input_buffer(req), -1));
+	evhttp_send_reply(req, 500, "Internal Server Error", NULL);
 }

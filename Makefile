@@ -8,8 +8,8 @@ CFLAGS+= -Wmissing-declarations
 CFLAGS+= -Wshadow -Wpointer-arith -Wcast-qual
 CFLAGS+= -Wsign-compare
 YFLAGS=
-LDADD+= -levent -L/usr/local/lib -luuid -leventextra `pkg-config --libs libxml-2.0`
-DPADD+= ${LIBEVENT}
+LDADD+= -L/usr/local/lib -levent_core -levent_extra -luuid `pkg-config --libs libxml-2.0`
+#DPADD+= ${LIBEVENT}
 MAN=	#igdpcpd.8 igdpcpd.conf.5
 
 MANDIR=	${LOCALBASE}/man/cat

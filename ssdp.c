@@ -49,7 +49,7 @@ enum ssdp_callback_type {
 struct ssdp_callback {
 	enum ssdp_callback_type		 type;
 	struct igdpcpd			*env;
-	struct event			 ev;
+	struct event			*ev;
 	struct listen_addr		*la;
 	struct sockaddr_storage		 ss;
 	socklen_t			 slen;
@@ -308,15 +308,16 @@ ssdp_sendto(int fd, short event, void *arg)
 	}
 
 	log_debug("Sending to %s\n%.*s",
-	    log_sockaddr((struct sockaddr *)&cb->ss), EVBUFFER_LENGTH(output),
-	    EVBUFFER_DATA(output));
+	    log_sockaddr((struct sockaddr *)&cb->ss),
+	    evbuffer_get_length(output), evbuffer_pullup(output, -1));
 
-	if (sendto(cb->la->fd, EVBUFFER_DATA(output), EVBUFFER_LENGTH(output),
-	    0, (struct sockaddr *)&cb->ss, cb->slen) < 0)
+	if (sendto(cb->la->fd, evbuffer_pullup(output, -1),
+	    evbuffer_get_length(output), 0, (struct sockaddr *)&cb->ss,
+	    cb->slen) < 0)
 		log_warn("sendto");
 
 	/* Required before free? */
-	evbuffer_drain(output, EVBUFFER_LENGTH(output));
+	evbuffer_drain(output, evbuffer_get_length(output));
 
 cleanup:
 	evbuffer_free(output);
@@ -334,7 +335,7 @@ ssdp_callback_new(struct igdpcpd *env)
 		return (NULL);
 
 	cb->env = env;
-	evtimer_set(&cb->ev, ssdp_sendto, cb);
+	cb->ev = evtimer_new(env->sc_base, ssdp_sendto, cb);
 
 	return (cb);
 }
@@ -361,6 +362,8 @@ ssdp_callback_free(struct ssdp_callback *cb)
 		log_warnx("unknown callback type");
 		break;
 	}
+
+	event_free(cb->ev);
 
 	free(cb);
 }
@@ -404,7 +407,7 @@ ssdp_multicast(struct igdpcpd *env, char *nt, char *usn)
 			fatal("strdup");
 
 		/* Schedule immediately */
-		evtimer_add(&cb->ev, &tv);
+		evtimer_add(cb->ev, &tv);
 	}
 }
 
@@ -458,7 +461,7 @@ ssdp_announce(int fd, short event, void *arg)
 		free(usn);
 	}
 
-	evtimer_add(&env->sc_announce_ev, &tv);
+	evtimer_add(env->sc_announce_ev, &tv);
 }
 
 struct ssdp_header *
@@ -559,25 +562,25 @@ ssdp_parse_packet(struct evbuffer *packet, char **verb, char **uri,
 		TAILQ_INSERT_TAIL(headers, header, entry);
 	}
 
-	if (EVBUFFER_LENGTH(packet)) {
+	if (evbuffer_get_length(packet)) {
 		if ((header = ssdp_find_header(headers,
 		    "content-length")) != NULL) {
 			len = atoi(header->value);
 
-			if (len > EVBUFFER_LENGTH(packet)) {
+			if (len > evbuffer_get_length(packet)) {
 				log_warnx("Not enough data");
 				goto cleanup;
 			}
 		} else
-			len = EVBUFFER_LENGTH(packet);
+			len = evbuffer_get_length(packet);
 
 		if ((*body = calloc(len, sizeof(char))) == NULL)
 			goto cleanup;
 		evbuffer_remove(packet, *body, len);
 
-		if (EVBUFFER_LENGTH(packet))
+		if (evbuffer_get_length(packet))
 			log_warnx("Ignoring %d bytes of trailing data",
-			    EVBUFFER_LENGTH(packet));
+			    evbuffer_get_length(packet));
 	}
 
 	return (0);
@@ -629,7 +632,7 @@ ssdp_unicast(struct igdpcpd *env, struct listen_addr *la,
 		    tv.tv_sec, tv.tv_usec);
 	}
 
-	evtimer_add(&cb->ev, &tv);
+	evtimer_add(cb->ev, &tv);
 }
 
 void

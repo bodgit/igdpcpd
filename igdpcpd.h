@@ -21,8 +21,10 @@
 #include <sys/socket.h>
 #include <sys/queue.h>
 
-#include <event.h>
-#include <evhttp.h>
+#include <event2/event.h>
+#include <event2/buffer.h>
+#include <event2/http.h>
+#include <event2/keyvalq_struct.h>
 #include <netdb.h>
 
 #include <libxml/tree.h>
@@ -203,7 +205,7 @@ struct listen_addr {
 	int				 fd;
 	int				 http_fd;
 	unsigned int			 index;
-	struct event			 ev;
+	struct event			*ev;
 };
 
 struct ntp_addr {
@@ -218,6 +220,7 @@ struct ntp_addr_wrap {
 };
 
 struct igdpcpd {
+	struct event_base	*sc_base;
 	u_int8_t		 sc_flags;
 #define IGDPCPD_F_VERBOSE	 0x01;
 
@@ -230,9 +233,9 @@ struct igdpcpd {
 	u_int16_t		 sc_port;
 	int			 sc_mc4_fd;
 	int			 sc_mc6_fd;
-	struct event		 sc_mc4_ev;
-	struct event		 sc_mc6_ev;
-	struct event		 sc_announce_ev;
+	struct event		*sc_mc4_ev;
+	struct event		*sc_mc6_ev;
+	struct event		*sc_announce_ev;
 	struct evhttp		*sc_httpd;
 	struct ssdp_root	*sc_root;
 };

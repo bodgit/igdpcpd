@@ -83,9 +83,9 @@ main(int argc, char *argv[])
 	int			 ttl6 = UPNP_MULTICAST_TTL;
 	struct ip_mreq		 mreq4;
 	struct ipv6_mreq	 mreq6;
-	struct event		 ev_sighup;
-	struct event		 ev_sigint;
-	struct event		 ev_sigterm;
+	struct event		*ev_sighup;
+	struct event		*ev_sigint;
+	struct event		*ev_sigterm;
 	struct timeval		 tv = { 0, 0 };
 	socklen_t		 slen;
 
@@ -454,34 +454,35 @@ main(int argc, char *argv[])
 	    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid))
 		fatal("cannot drop privileges");
 
-	event_init();
+	if ((env->sc_base = event_base_new()) == NULL)
+		fatalx("event_base_new");
 
 	signal(SIGPIPE, SIG_IGN);
-	signal_set(&ev_sighup, SIGHUP, handle_signal, env);
-	signal_set(&ev_sigint, SIGINT, handle_signal, env);
-	signal_set(&ev_sigterm, SIGTERM, handle_signal, env);
-	signal_add(&ev_sighup, NULL);
-	signal_add(&ev_sigint, NULL);
-	signal_add(&ev_sigterm, NULL);
+	ev_sighup = evsignal_new(env->sc_base, SIGHUP, handle_signal, env);
+	ev_sigint = evsignal_new(env->sc_base, SIGINT, handle_signal, env);
+	ev_sigterm = evsignal_new(env->sc_base, SIGTERM, handle_signal, env);
+	evsignal_add(ev_sighup, NULL);
+	evsignal_add(ev_sigint, NULL);
+	evsignal_add(ev_sigterm, NULL);
 
 	if (env->sc_mc4_fd) {
-		event_set(&env->sc_mc4_ev, env->sc_mc4_fd, EV_READ|EV_PERSIST,
-		    ssdp_recvmsg, env);
-		event_add(&env->sc_mc4_ev, NULL);
+		env->sc_mc4_ev = event_new(env->sc_base, env->sc_mc4_fd,
+		    EV_READ|EV_PERSIST, ssdp_recvmsg, env);
+		event_add(env->sc_mc4_ev, NULL);
 	}
 
 	if (env->sc_mc6_fd) {
-		event_set(&env->sc_mc6_ev, env->sc_mc6_fd, EV_READ|EV_PERSIST,
-		    ssdp_recvmsg, env);
-		event_add(&env->sc_mc6_ev, NULL);
+		env->sc_mc6_ev = event_new(env->sc_base, env->sc_mc6_fd,
+		    EV_READ|EV_PERSIST, ssdp_recvmsg, env);
+		event_add(env->sc_mc6_ev, NULL);
 	}
 
-	env->sc_httpd = evhttp_new(NULL);
+	env->sc_httpd = evhttp_new(env->sc_base);
 
 	for (la = TAILQ_FIRST(&env->listen_addrs); la; ) {
-		event_set(&la->ev, la->fd, EV_READ|EV_PERSIST,
+		la->ev = event_new(env->sc_base, la->fd, EV_READ|EV_PERSIST,
 		    ssdp_recvmsg, env);
-		event_add(&la->ev, NULL);
+		event_add(la->ev, NULL);
 
 		evhttp_accept_socket(env->sc_httpd, la->http_fd);
 
@@ -494,10 +495,10 @@ main(int argc, char *argv[])
 	/* FIXME DEBUG */
 	evhttp_set_gencb(env->sc_httpd, upnp_debug, env);
 
-	evtimer_set(&env->sc_announce_ev, ssdp_announce, env);
-	evtimer_add(&env->sc_announce_ev, &tv);
+	env->sc_announce_ev = evtimer_new(env->sc_base, ssdp_announce, env);
+	evtimer_add(env->sc_announce_ev, &tv);
 
-	event_dispatch();
+	event_base_dispatch(env->sc_base);
 
 	return (0);
 }
