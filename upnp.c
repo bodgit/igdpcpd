@@ -1615,7 +1615,7 @@ upnp_describe(struct evhttp_request *req, void *arg)
 	if (evhttp_request_get_command(req) != EVHTTP_REQ_GET) {
 		evhttp_add_header(evhttp_request_get_output_headers(req),
 		    "Allow", "GET");
-		evhttp_send_reply(req, 405, "Bad Method", NULL);
+		evhttp_send_reply(req, HTTP_BADMETHOD, "Bad Method", NULL);
 		return;
 	}
 
@@ -1694,7 +1694,7 @@ upnp_soap_error(struct evhttp_request *req, enum upnp_errors error)
 	upnp_content_type_header(req);
 	upnp_date_header(req);
 
-	evhttp_send_reply(req, 500, "Internal Server Error", output);
+	evhttp_send_reply(req, HTTP_INTERNAL, "Internal Server Error", output);
 	evbuffer_free(output);
 }
 
@@ -1717,7 +1717,7 @@ upnp_control(struct evhttp_request *req, void *arg)
 	if (evhttp_request_get_command(req) != EVHTTP_REQ_POST) {
 		evhttp_add_header(evhttp_request_get_output_headers(req),
 		    "Allow", "POST");
-		evhttp_send_reply(req, 405, "Bad Method", NULL);
+		evhttp_send_reply(req, HTTP_BADMETHOD, "Bad Method", NULL);
 		return;
 	}
 
@@ -1925,7 +1925,7 @@ upnp_control(struct evhttp_request *req, void *arg)
 	return;
 
 bad:
-	evhttp_send_reply(req, 400, "Bad Request", NULL);
+	evhttp_send_reply(req, HTTP_BADREQUEST, "Bad Request", NULL);
 }
 
 void
@@ -1941,7 +1941,7 @@ upnp_event(struct evhttp_request *req, void *arg)
 		log_debug("%s: %s", header->key, header->value);
 		
 	log_debug("%.*s", evbuffer_get_length(evhttp_request_get_input_buffer(req)), evbuffer_pullup(evhttp_request_get_input_buffer(req), -1));
-	evhttp_send_reply(req, 500, "Internal Server Error", NULL);
+	evhttp_send_reply(req, HTTP_INTERNAL, "Internal Server Error", NULL);
 }
 
 void
@@ -1957,5 +1957,5 @@ upnp_debug(struct evhttp_request *req, void *arg)
 		log_debug("%s: %s", header->key, header->value);
 	
 	log_debug("%.*s", evbuffer_get_length(evhttp_request_get_input_buffer(req)), evbuffer_pullup(evhttp_request_get_input_buffer(req), -1));
-	evhttp_send_reply(req, 500, "Internal Server Error", NULL);
+	evhttp_send_reply(req, HTTP_INTERNAL, "Internal Server Error", NULL);
 }
