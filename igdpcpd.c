@@ -41,8 +41,8 @@
 __dead void		 usage(void);
 void			 handle_signal(int, short, void *);
 
-struct sockaddr_in	 ssdp4;
-struct sockaddr_in6	 ssdp6;
+struct sockaddr_in	 ssdp4, pcp4;
+struct sockaddr_in6	 ssdp6, pcp6;
 struct utsname		 name;
 
 /* __dead is for lint */
@@ -73,7 +73,8 @@ main(int argc, char *argv[])
 	u_int			 flags = 0;
 	struct passwd		*pw;
 	struct igdpcpd		*env;
-	struct in6_addr		 all_nodes = IN6ADDR_LINKLOCAL_SSDP_INIT;
+	struct in6_addr		 ssdp_link_nodes = IN6ADDR_LINKLOCAL_SSDP_INIT;
+	struct in6_addr		 all_nodes = IN6ADDR_LINKLOCAL_ALLNODES_INIT;
 	struct ifaddrs		*ifap, *ifa, *ifal;
 	struct listen_addr	*la;
 	int			 reuse = 1;
@@ -148,8 +149,20 @@ main(int argc, char *argv[])
 	memset(&ssdp6, 0, sizeof(ssdp6));
 	ssdp6.sin6_family = AF_INET6;
 	ssdp6.sin6_len = sizeof(ssdp6);
-	ssdp6.sin6_addr = all_nodes;
+	ssdp6.sin6_addr = ssdp_link_nodes;
 	ssdp6.sin6_port = htons(SSDP_PORT);
+
+	memset(&pcp4, 0, sizeof(pcp4));
+	pcp4.sin_family = AF_INET;
+	pcp4.sin_len = sizeof(pcp4);
+	pcp4.sin_addr.s_addr = htonl(INADDR_ALLHOSTS_GROUP);
+	pcp4.sin_port = htons(PCP_CLIENT_PORT);
+
+	memset(&pcp6, 0, sizeof(pcp6));
+	pcp6.sin6_family = AF_INET6;
+	pcp6.sin6_len = sizeof(pcp6);
+	pcp6.sin6_addr = all_nodes;
+	pcp6.sin6_port = htons(PCP_CLIENT_PORT);
 
 	if (uname(&name) == -1)
 		fatal("uname");
