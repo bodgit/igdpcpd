@@ -26,6 +26,8 @@
 #include <event2/http.h>
 #include <event2/keyvalq_struct.h>
 #include <netdb.h>
+#include <pwd.h>
+#include <imsg.h>
 
 #include <libxml/tree.h>
 #include <libxml/parser.h>
@@ -200,6 +202,19 @@ struct ntp_addr_wrap {
 	u_int8_t		 pool;
 };
 
+struct imsgev {
+	struct imsgbuf		  ibuf;
+	void			(*handler)(int, short, void *);
+	struct event		 *ev;
+	void			 *data;
+	short			  events;
+};
+
+enum imsg_type {
+	IMSG_NONE,
+	IMSG_HOST_DNS,
+};
+
 struct igdpcpd {
 	struct event_base	*sc_base;
 	u_int8_t		 sc_flags;
@@ -219,9 +234,15 @@ struct igdpcpd {
 	struct event		*sc_announce_ev;
 	struct evhttp		*sc_httpd;
 	struct ssdp_root	*sc_root;
+	struct imsgev		*sc_iev_dns;
 };
 
 /* prototypes */
+/* igdpcpd.c */
+void			 imsg_event_add(struct imsgev *);
+int			 imsg_compose_event(struct imsgev *, u_int16_t,
+			     u_int32_t, pid_t, int, void *, u_int16_t);
+
 /* log.c */
 void			 log_init(int);
 void			 vlog(int, const char *, va_list);
@@ -254,5 +275,8 @@ void			 upnp_nss_free(struct upnp_nss *);
 struct ssdp_root	*upnp_root_device(u_int32_t, enum upnp_devices,
 			     struct evhttp *);
 void			 upnp_debug(struct evhttp_request *, void *);
+
+/* dns.c */
+pid_t			 igdpcpd_dns(int[2], struct passwd *);
 
 #endif

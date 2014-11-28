@@ -26,7 +26,6 @@
 #include <string.h>
 #include <fcntl.h>
 #include <err.h>
-#include <pwd.h>
 #include <ifaddrs.h>
 #include <unistd.h>
 
@@ -40,6 +39,7 @@
 
 __dead void		 usage(void);
 void			 handle_signal(int, short, void *);
+void			 client_dispatch_dns(int, short, void *);
 
 struct sockaddr_in	 ssdp4, pcp4;
 struct sockaddr_in6	 ssdp6, pcp6;
@@ -61,6 +61,113 @@ handle_signal(int sig, short event, void *arg)
 	log_info("exiting on signal %d", sig);
 
 	exit(0);
+}
+
+void
+client_dispatch_dns(int fd, short events, void *arg)
+{
+	struct igdpcpd	*env = (struct igdpcpd *)arg;
+	struct imsg	 imsg;
+	u_int16_t	 dlen;
+	u_char		*data;
+	struct ntp_addr	*h;
+	int		 n;
+	int		 shut = 0;
+	struct imsgev	*iev = env->sc_iev_dns;
+	struct imsgbuf	*ibuf = &iev->ibuf;
+
+	if ((events & (EV_READ | EV_WRITE)) == 0)
+		fatalx("unknown event");
+
+	if (events & EV_READ) {
+		if ((n = imsg_read(ibuf)) == -1)
+			fatal("imsg_read error");
+		if (n == 0)
+			shut = 1;
+	}
+	if (events & EV_WRITE) {
+		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
+			fatal("msgbuf_write");
+		if (n == 0)
+			shut = 1;
+		goto done;
+	}
+
+	for (;;) {
+		if ((n = imsg_get(ibuf, &imsg)) == -1)
+			fatal("client_dispatch_dns: imsg_get error");
+		if (n == 0)
+			break;
+
+		switch (imsg.hdr.type) {
+		case IMSG_HOST_DNS:
+			/* FIXME Find matching request */
+
+			dlen = imsg.hdr.len - IMSG_HEADER_SIZE;
+			if (dlen == 0)
+				break;
+
+			data = (u_char *)imsg.data;
+			while (dlen >= sizeof(struct sockaddr_storage)) {
+				if ((h = calloc(1, sizeof(struct ntp_addr))) == NULL)
+					fatal(NULL);
+				memcpy(&h->ss, data, sizeof(h->ss));
+
+				log_debug("IMSG_HOST_DNS = %s",
+				    log_sockaddr((struct sockaddr *)&h->ss));
+
+				free(h);
+
+				data += sizeof(h->ss);
+				dlen -= sizeof(h->ss);
+			}
+			if (dlen != 0)
+				fatalx("IMSG_HOST_DNS: dlen != 0");
+
+			break;
+		default:
+			break;
+		}
+		imsg_free(&imsg);
+	}
+
+done:
+	if (!shut)
+		imsg_event_add(iev);
+	else {
+		event_del(iev->ev);
+		event_base_loopexit(event_get_base(iev->ev), NULL);
+	}
+}
+
+void
+imsg_event_add(struct imsgev *iev)
+{
+	if (iev->handler == NULL) {
+		imsg_flush(&iev->ibuf);
+		return;
+	}
+
+	iev->events = EV_READ;
+	if (iev->ibuf.w.queued)
+		iev->events |= EV_WRITE;
+
+	event_del(iev->ev);
+	event_assign(iev->ev, event_get_base(iev->ev), iev->ibuf.fd,
+	    iev->events, iev->handler, iev->data);
+	event_add(iev->ev, NULL);
+}
+
+int
+imsg_compose_event(struct imsgev *iev, u_int16_t type, u_int32_t peerid,
+    pid_t pid, int fd, void *data, u_int16_t datalen)
+{
+	int	 ret;
+
+	if ((ret = imsg_compose(&iev->ibuf, type, peerid, pid, fd, data,
+	    datalen)) != -1)
+		imsg_event_add(iev);
+	return (ret);
 }
 
 int
@@ -89,6 +196,8 @@ main(int argc, char *argv[])
 	struct event		*ev_sigterm;
 	struct timeval		 tv = { 0, 0 };
 	socklen_t		 slen;
+	int			 dns_pipe[2];
+	pid_t			 dns_pid;
 
 	log_init(1);
 
@@ -457,6 +566,11 @@ main(int argc, char *argv[])
 
 	log_info("startup");
 
+	if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, dns_pipe) == -1)
+		fatal("socketpair");
+	dns_pid = igdpcpd_dns(dns_pipe, pw);
+	close(dns_pipe[1]);
+
 	if (chroot(pw->pw_dir) == -1)
 		fatal("chroot");
 	if (chdir("/") == -1)
@@ -477,6 +591,18 @@ main(int argc, char *argv[])
 	evsignal_add(ev_sighup, NULL);
 	evsignal_add(ev_sigint, NULL);
 	evsignal_add(ev_sigterm, NULL);
+
+	if ((env->sc_iev_dns = calloc(1, sizeof(struct imsgev))) == NULL)
+		fatal(NULL);
+
+	env->sc_iev_dns->events = EV_READ;
+	env->sc_iev_dns->data = env;
+	imsg_init(&env->sc_iev_dns->ibuf, dns_pipe[0]);
+	env->sc_iev_dns->handler = client_dispatch_dns;
+	env->sc_iev_dns->ev = event_new(env->sc_base, env->sc_iev_dns->ibuf.fd,
+	    env->sc_iev_dns->events, env->sc_iev_dns->handler,
+	    env->sc_iev_dns->data);
+	event_add(env->sc_iev_dns->ev, NULL);
 
 	if (env->sc_mc4_fd) {
 		env->sc_mc4_ev = event_new(env->sc_base, env->sc_mc4_fd,
@@ -510,6 +636,11 @@ main(int argc, char *argv[])
 
 	env->sc_announce_ev = evtimer_new(env->sc_base, ssdp_announce, env);
 	evtimer_add(env->sc_announce_ev, &tv);
+
+#if 0
+	imsg_compose_event(env->sc_iev_dns, IMSG_HOST_DNS, 0, 0, -1,
+	    "www.google.com", 15);
+#endif
 
 	event_base_dispatch(env->sc_base);
 
